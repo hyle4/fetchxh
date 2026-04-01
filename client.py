@@ -11,7 +11,7 @@ from typing import Any
 
 import requests
 
-from .paths import first_existing_path, preferred_x_state_path, state_roots
+from .paths import browser_profile_candidates, first_existing_path, preferred_x_state_path
 
 _QUERY_ID_RE = rb"([A-Za-z0-9_-]{20,32})"
 _BEARER_RE = re.compile(rb"Bearer AAAAAAAAAAAAAAAAAAAA[^\x00\"'\s\\]+")
@@ -158,26 +158,7 @@ def _coalesce(*values: str | None) -> str:
 
 
 def _candidate_profile_dirs() -> list[Path]:
-    profiles: list[Path] = []
-    seen: set[Path] = set()
-
-    for root in state_roots():
-        for candidate in (root / "browser_profile", root / "uc_profile"):
-            if candidate.exists() and candidate not in seen:
-                seen.add(candidate)
-                profiles.append(candidate)
-
-        active = root / ".active_profile"
-        try:
-            active_name = active.read_text(encoding="utf-8").strip()
-        except OSError:
-            active_name = ""
-        if active_name:
-            candidate = root / active_name
-            if candidate.exists() and candidate not in seen:
-                seen.add(candidate)
-                profiles.append(candidate)
-    return profiles
+    return browser_profile_candidates()
 
 
 def _code_cache_roots() -> list[Path]:

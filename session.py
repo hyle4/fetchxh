@@ -10,10 +10,18 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .paths import preferred_state_root, preferred_x_state_path
+from .paths import (
+    active_profile_name_path,
+    browser_profile_candidates,
+    preferred_state_root,
+    preferred_x_state_path,
+)
 
 X_BASE_URL = "https://x.com"
 LOGIN_URL = f"{X_BASE_URL}/i/flow/login"
@@ -204,8 +212,8 @@ def _kill_tracked_browser() -> None:
         _clear_browser_pid()
 
 
-def _clear_profile_artifacts() -> None:
-    profile_dir = _profile_dir()
+def _clear_profile_artifacts(profile_dir: Path | None = None) -> None:
+    profile_dir = profile_dir or _profile_dir()
     for name in (
         "lockfile",
         "SingletonLock",
@@ -235,8 +243,43 @@ def _kill_fetchxh_chrome() -> None:
         _kill_tracked_browser()
     except Exception:
         pass
+    _kill_profile_chrome_processes()
     time.sleep(0.5)
     _clear_profile_artifacts()
+
+
+def _kill_profile_chrome_processes() -> None:
+    if sys.platform != "win32":
+        return
+
+    script = r"""
+$patterns = @(
+  '\fetchxh\browser_profile',
+  '\fetchxh\browser_profile-',
+  '\fetchx\uc_profile',
+  '\fetchx\browser_profile'
+)
+Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+  Where-Object {
+    $cmd = $_.CommandLine
+    if (-not $cmd) { return $false }
+    foreach ($pattern in $patterns) {
+      if ($cmd -like ('*' + $pattern + '*')) { return $true }
+    }
+    return $false
+  } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+"""
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            timeout=8,
+        )
+    except Exception:
+        pass
 
 
 def _patch_nodriver_utf8_issue() -> None:
@@ -254,16 +297,25 @@ def _patch_nodriver_utf8_issue() -> None:
 
 
 class XSessionRefresher:
-    def __init__(self, *, headless: bool = True, delay_ms: int = 1200, timeout_ms: int = 15000) -> None:
+    def __init__(
+        self,
+        *,
+        headless: bool = True,
+        delay_ms: int = 1200,
+        timeout_ms: int = 15000,
+        prefer_fresh_profile: bool = False,
+    ) -> None:
         self.headless = headless
         self.delay_ms = delay_ms
         self.timeout_ms = timeout_ms
+        self.prefer_fresh_profile = prefer_fresh_profile
         self._browser = None
         self._tab = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._nd = None
         self._chrome_proc: subprocess.Popen[bytes] | None = None
         self._debug_port: int | None = None
+        self._active_profile_dir: Path | None = None
 
     def __enter__(self) -> XSessionRefresher:
         _patch_nodriver_utf8_issue()
@@ -275,6 +327,10 @@ class XSessionRefresher:
                 "Automatic renewal requires the optional browser dependency. Install with: pip install 'fetchxh[renew]'"
             ) from exc
 
+        if sys.platform == "win32":
+            selector_policy = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+            if selector_policy is not None:
+                asyncio.set_event_loop_policy(selector_policy())
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._run(self._async_start())
@@ -297,50 +353,39 @@ class XSessionRefresher:
         return self._loop.run_until_complete(coro)
 
     async def _async_start(self) -> None:
-        profile_dir = _profile_dir()
-        profile_dir.mkdir(parents=True, exist_ok=True)
         chrome_bin = _discover_chrome_binary()
         if not chrome_bin.exists():
             raise SessionRefreshError(
                 "Google Chrome was not found. Install it or set FETCHXH_CHROME_BIN."
             )
 
-        direct_start_exc: Exception | None = None
-        try:
-            kwargs: dict[str, Any] = {
-                "user_data_dir": profile_dir,
-                "headless": self.headless,
-                "browser_executable_path": chrome_bin,
-                "browser_args": ["--window-size=1280,900"],
-            }
-            self._browser = await asyncio.wait_for(self._nd.start(**kwargs), timeout=15)
-            self._tab = await asyncio.wait_for(self._browser.get("about:blank"), timeout=10)
-            _write_browser_pid(getattr(getattr(self._browser, "_process", None), "pid", None))
-            return
-        except Exception as exc:
-            direct_start_exc = exc
-            self._browser = None
-            self._tab = None
-            _kill_fetchxh_chrome()
-
-        self._debug_port = _reserve_debug_port()
-        self._chrome_proc = _spawn_debug_chrome(chrome_bin, profile_dir, self._debug_port, headless=self.headless)
-        _write_browser_pid(self._chrome_proc.pid if self._chrome_proc is not None else None)
-
-        attach_exc: Exception | None = None
-        for _ in range(8):
+        errors: list[str] = []
+        for profile_dir in self._profile_candidates():
             try:
+                profile_dir.mkdir(parents=True, exist_ok=True)
+                self._remember_active_profile(profile_dir)
+                self._debug_port = _reserve_debug_port()
+                self._chrome_proc = _spawn_debug_chrome(
+                    chrome_bin,
+                    profile_dir,
+                    self._debug_port,
+                    headless=self.headless,
+                )
+                _write_browser_pid(self._chrome_proc.pid if self._chrome_proc is not None else None)
+                await self._wait_for_debug_endpoint_async(profile_dir, self._debug_port, self._chrome_proc)
                 self._browser = await asyncio.wait_for(
                     self._nd.start(host="127.0.0.1", port=self._debug_port),
-                    timeout=4,
+                    timeout=8,
                 )
-                break
+                self._tab = await asyncio.wait_for(self._browser.get("about:blank"), timeout=10)
+                self._active_profile_dir = profile_dir
+                return
             except Exception as exc:
-                attach_exc = exc
-                await asyncio.sleep(0.5)
-        if self._browser is None:
-            raise SessionRefreshError("Could not connect to Chrome for session renewal.") from (attach_exc or direct_start_exc)
-        self._tab = await asyncio.wait_for(self._browser.get("about:blank"), timeout=10)
+                errors.append(f"{profile_dir.name}: {exc}")
+                await self._cleanup_failed_start_async(profile_dir)
+
+        summary = "; ".join(errors) if errors else "no usable browser profile was available"
+        raise SessionRefreshError(f"Could not connect to Chrome for session renewal. Tried: {summary}")
 
     async def _async_stop(self) -> None:
         try:
@@ -368,8 +413,96 @@ class XSessionRefresher:
                 except Exception:
                     pass
             self._chrome_proc = None
+            self._active_profile_dir = None
             _clear_browser_pid()
             _kill_fetchxh_chrome()
+
+    async def _cleanup_failed_start_async(self, profile_dir: Path) -> None:
+        try:
+            if self._browser is not None:
+                await _disconnect_nodriver_connections(self._browser, self._tab)
+        finally:
+            self._browser = None
+            self._tab = None
+            if self._chrome_proc is not None:
+                try:
+                    if self._chrome_proc.poll() is None:
+                        self._chrome_proc.terminate()
+                        self._chrome_proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        self._chrome_proc.kill()
+                        self._chrome_proc.wait(timeout=2)
+                    except Exception:
+                        pass
+            self._chrome_proc = None
+            self._debug_port = None
+            _clear_browser_pid()
+            _clear_profile_artifacts(profile_dir)
+
+    def _profile_candidates(self) -> list[Path]:
+        candidates: list[Path] = []
+        seen: set[Path] = set()
+
+        if self.prefer_fresh_profile:
+            fresh = preferred_state_root() / f"browser_profile-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            seen.add(fresh)
+            candidates.append(fresh)
+
+        for candidate in browser_profile_candidates(prefer_legacy=not self.prefer_fresh_profile):
+            if candidate not in seen:
+                seen.add(candidate)
+                candidates.append(candidate)
+
+        default_profile = _profile_dir()
+        if default_profile not in seen:
+            seen.add(default_profile)
+            candidates.append(default_profile)
+
+        return candidates
+
+    def _remember_active_profile(self, profile_dir: Path) -> None:
+        root = preferred_state_root()
+        try:
+            if profile_dir.parent == root:
+                root.mkdir(parents=True, exist_ok=True)
+                active_profile_name_path(root).write_text(profile_dir.name, encoding="utf-8")
+        except OSError:
+            pass
+
+    async def _wait_for_debug_endpoint_async(
+        self,
+        profile_dir: Path,
+        port: int,
+        proc: subprocess.Popen[bytes],
+    ) -> None:
+        url = f"http://127.0.0.1:{port}/json/version"
+        deadline = time.time() + 12
+        last_error: Exception | None = None
+
+        while time.time() < deadline:
+            exit_code = proc.poll()
+            if exit_code is not None:
+                if exit_code == 21:
+                    raise SessionRefreshError(
+                        f"Chrome could not use profile '{profile_dir.name}' because it is locked or inaccessible."
+                    )
+                raise SessionRefreshError(
+                    f"Chrome exited early while opening profile '{profile_dir.name}' (exit code {exit_code})."
+                )
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: urllib.request.urlopen(url, timeout=2).read(),
+                )
+                return
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last_error = exc
+                await asyncio.sleep(0.5)
+
+        raise SessionRefreshError(
+            f"Chrome did not expose a debugging endpoint for profile '{profile_dir.name}': {last_error or 'timeout'}"
+        )
 
     async def _goto(self, url: str) -> None:
         self._tab = await self._browser.get(url)
@@ -487,6 +620,11 @@ def renew_x_session_state(
     delay_ms: int = 1200,
     timeout_ms: int = 15000,
 ) -> Path:
-    with XSessionRefresher(headless=headless, delay_ms=delay_ms, timeout_ms=timeout_ms) as refresher:
+    with XSessionRefresher(
+        headless=headless,
+        delay_ms=delay_ms,
+        timeout_ms=timeout_ms,
+        prefer_fresh_profile=force_login,
+    ) as refresher:
         refresher.ensure_authenticated(force_login=force_login)
         return refresher.save_x_state()

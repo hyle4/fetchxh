@@ -27,6 +27,44 @@ def state_roots() -> list[Path]:
     return roots
 
 
+def active_profile_name_path(root: Path) -> Path:
+    return root / ".active_profile"
+
+
+def active_profile_dir(root: Path) -> Path | None:
+    try:
+        name = active_profile_name_path(root).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not name:
+        return None
+    candidate = root / name
+    return candidate if candidate.exists() else None
+
+
+def browser_profile_candidates(*, prefer_legacy: bool = False) -> list[Path]:
+    roots = state_roots()
+    if prefer_legacy:
+        roots = sorted(roots, key=lambda root: 0 if root == legacy_state_root() else 1)
+
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+
+    for root in roots:
+        active = active_profile_dir(root)
+        if active is not None and active not in seen:
+            seen.add(active)
+            candidates.append(active)
+
+        for name in ("browser_profile", "uc_profile"):
+            candidate = root / name
+            if candidate.exists() and candidate not in seen:
+                seen.add(candidate)
+                candidates.append(candidate)
+
+    return candidates
+
+
 def first_existing_path(*parts: str) -> Path | None:
     for root in state_roots():
         path = root.joinpath(*parts)
@@ -40,4 +78,3 @@ def preferred_x_state_path() -> Path:
     if override:
         return Path(override).expanduser()
     return preferred_state_root() / "x_state.json"
-
