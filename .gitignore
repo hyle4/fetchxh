@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.mypy_cache/
+.pytest_cache/
+.venv/
+build/
+dist/
+
+# Local session state
+browser_profile/
+x_state.json
+*.session.dat
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db

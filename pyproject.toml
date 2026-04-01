@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fetchxh"
+version = "0.2.0"
+description = "Terminal-first X timeline reader over HTTP with local session renewal"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+]
+keywords = ["x", "twitter", "cli", "http", "timeline"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+renew = [
+    "nodriver>=0.40",
+]
+
+[project.urls]
+Homepage = "https://github.com/hyle4/fetchxh"
+Repository = "https://github.com/hyle4/fetchxh"
+Issues = "https://github.com/hyle4/fetchxh/issues"
+
+[project.scripts]
+fetchxh = "fetchxh.cli:main"
+
+[tool.setuptools]
+packages = ["fetchxh"]
+
+[tool.setuptools.package-dir]
+fetchxh = "."
