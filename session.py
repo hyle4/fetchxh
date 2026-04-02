@@ -586,7 +586,10 @@ class XSessionRefresher:
         await self._wait_for_login_async()
 
     def export_x_state(self) -> dict[str, Any]:
-        return self._run(asyncio.wait_for(self._export_x_state_async(), timeout=20))
+        try:
+            return self._run(asyncio.wait_for(self._export_x_state_async(), timeout=20))
+        except TimeoutError as exc:
+            raise SessionRefreshError("Timed out while exporting the refreshed X session from Chrome.") from exc
 
     async def _export_x_state_async(self) -> dict[str, Any]:
         current_url = (await self._current_url()).lower()
@@ -594,10 +597,28 @@ class XSessionRefresher:
             await self._goto(HOME_URL)
             await self._sleep_async(1.5)
 
-        cookies = await self._browser.cookies.get_all()
-        raw_local_storage = await self._evaluate_json(
-            "Object.entries(window.localStorage).map(([name, value]) => ({name, value}))"
-        )
+        try:
+            cookies = await asyncio.wait_for(
+                self._tab.send(self._nd.cdp.storage.get_cookies()),
+                timeout=8.0,
+            )
+        except TimeoutError as exc:
+            raise SessionRefreshError("Timed out while reading Chrome cookies for the refreshed X session.") from exc
+        except Exception as exc:
+            raise SessionRefreshError("Could not read Chrome cookies for the refreshed X session.") from exc
+
+        if not any(_is_x_cookie_domain(cookie.domain) and cookie.name in {"auth_token", "ct0"} for cookie in cookies):
+            raise SessionRefreshError("Chrome did not expose the X auth cookies after login.")
+
+        try:
+            raw_local_storage = await asyncio.wait_for(
+                self._evaluate_json(
+                    "Object.entries(window.localStorage).map(([name, value]) => ({name, value}))"
+                ),
+                timeout=4.0,
+            )
+        except Exception:
+            raw_local_storage = []
 
         local_storage: list[dict[str, str]] = []
         if isinstance(raw_local_storage, list):

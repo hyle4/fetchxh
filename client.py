@@ -25,8 +25,14 @@ DEFAULT_USER_AGENT = os.environ.get("FETCHXH_USER_AGENT", "").strip() or (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/146.0.7680.167 Safari/537.36"
 )
-DEFAULT_HOME_TIMELINE_QUERY_ID = os.environ.get("FETCHXH_HOME_TIMELINE_QUERY_ID", "").strip()
-DEFAULT_HOME_LATEST_TIMELINE_QUERY_ID = os.environ.get("FETCHXH_HOME_LATEST_TIMELINE_QUERY_ID", "").strip()
+# Non-secret fallback query ids. Runtime discovery from the active Chrome profile
+# takes precedence whenever fresher ids are available.
+DEFAULT_HOME_TIMELINE_QUERY_ID = (
+    os.environ.get("FETCHXH_HOME_TIMELINE_QUERY_ID", "").strip() or "xhYBF94fPSp8ey64FfYXiA"
+)
+DEFAULT_HOME_LATEST_TIMELINE_QUERY_ID = (
+    os.environ.get("FETCHXH_HOME_LATEST_TIMELINE_QUERY_ID", "").strip() or "0vp2Au9doTKsbn2vIk48Dg"
+)
 DEFAULT_AUTHORIZATION_BEARER = os.environ.get("FETCHXH_AUTHORIZATION_BEARER", "").strip()
 DEFAULT_X_CSRF_TOKEN = os.environ.get("FETCHXH_X_CSRF_TOKEN", "").strip()
 DEFAULT_COOKIE_HEADER = os.environ.get("FETCHXH_COOKIE_HEADER", "").strip()
