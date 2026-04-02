@@ -302,21 +302,19 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(session.get.call_args_list[0].args[0], initial.home_timeline_url)
         self.assertEqual(session.get.call_args_list[1].args[0], renewed.home_timeline_url)
 
-    def test_interactive_renew_uses_visible_login_fallback(self) -> None:
+    def test_interactive_renew_uses_visible_login_directly(self) -> None:
         calls: list[tuple[bool, bool]] = []
         result = _config()
 
         def fake_refresher(*, headless: bool, force_login: bool, delay_ms: int = 1200, timeout_ms: int = 15000) -> None:
             calls.append((headless, force_login))
-            if headless:
-                raise RuntimeError("saved session expired")
 
         with patch("fetchxh.session.renew_x_session_state", side_effect=fake_refresher):
             with patch(f"{CLIENT_MODULE}.refresh_runtime_config", return_value=result) as refresh:
                 renewed = renew_runtime_config(interactive=True)
 
         self.assertIs(renewed, result)
-        self.assertEqual(calls, [(True, False), (False, True)])
+        self.assertEqual(calls, [(False, True)])
         refresh.assert_called_once_with()
 
 

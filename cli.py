@@ -238,7 +238,7 @@ def _reload_auth() -> None:
 
 
 def _renew_auth() -> None:
-    _status("Renewing the local X session. A browser window will open only if login is needed.")
+    _status("Renewing the local X session. A browser window will open for the login check.")
     renew_runtime_config(interactive=True)
     _status("Session renewed.")
 
@@ -274,7 +274,9 @@ def main(argv: list[str] | None = None) -> int:
             if action == "reload":
                 try:
                     _renew_auth()
-                except Exception as exc:
+                except KeyboardInterrupt:
+                    raise
+                except BaseException as exc:
                     _status(f"Renew failed: {exc}")
                 continue
 

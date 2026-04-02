@@ -307,9 +307,7 @@ def renew_runtime_config(*, interactive: bool = False) -> FetchxhConfig:
             )
         return refresh_runtime_config()
 
-    attempts = [(True, False)]
-    if interactive:
-        attempts.append((False, True))
+    attempts = [(False, True)] if interactive else [(True, False)]
 
     last_error: Exception | None = None
     for headless, force_login in attempts:
