@@ -164,7 +164,7 @@ async def _disconnect_nodriver_connections(browser: Any = None, tab: Any = None)
         if disconnect is None:
             continue
         try:
-            await disconnect()
+            await asyncio.wait_for(disconnect(), timeout=1.0)
         except Exception:
             pass
     await asyncio.sleep(0)
@@ -390,11 +390,19 @@ class XSessionRefresher:
     async def _async_stop(self) -> None:
         try:
             if self._browser is not None:
-                if getattr(self._browser, "_process", None) is not None:
-                    stop = getattr(self._browser, "stop", None)
-                    if stop is not None:
+                stop = getattr(self._browser, "stop", None)
+                if stop is not None:
+                    try:
                         stop()
-                await _disconnect_nodriver_connections(self._browser, self._tab)
+                    except Exception:
+                        pass
+                try:
+                    await asyncio.wait_for(
+                        _disconnect_nodriver_connections(self._browser, self._tab),
+                        timeout=2.0,
+                    )
+                except Exception:
+                    pass
         finally:
             self._browser = None
             self._tab = None
@@ -578,7 +586,7 @@ class XSessionRefresher:
         await self._wait_for_login_async()
 
     def export_x_state(self) -> dict[str, Any]:
-        return self._run(self._export_x_state_async())
+        return self._run(asyncio.wait_for(self._export_x_state_async(), timeout=20))
 
     async def _export_x_state_async(self) -> dict[str, Any]:
         current_url = (await self._current_url()).lower()
